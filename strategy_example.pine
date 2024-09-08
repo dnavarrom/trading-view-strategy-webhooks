@@ -1,20 +1,23 @@
 // This source code is subject to the terms of the Mozilla Public License 2.0 at https://mozilla.org/MPL/2.0/
 // © diegonavarromartinez
 
-// Version 321.0
+// Version 346.0
 // Created: 20/09/2023
 // Last Modified: 07-09-2024
 // Situation: Development
 // Parameters: Defaults fixed to more aggresive mindset, I'll adjust them to a more conservative settings.
+// Market: BTC/USDT
+// Timeframe: 15 mmins
 // BASIC SETTINGS: default
 // COMMENTS: In this version I've working with takeprofit prices to enter or exit positions. This gives some stability
 //           in terms of variability tolerance but it seems to miss some good opportunities. In the next experiment I will
 //           trust in the indicator only (when signal says Enter Long, go and Buy and vice-versa) 
-// UPDATE 09-2024: Now working on a dynamic trailing stop to adjust the stop loss value based on volatility using ATR.
-
+// UPDATE 09-2024: Now working on a dynamic trailing stop to adjust the stop loss value based on volatility using ATR to 
+//                 capture some good opportunities and also, enter position confirmation using ADX to complement RSI and signals.
+//
 // *****************************************************************************************************************************
 // STRATEGY NAME: Half Normal Distribution wheighted by Fibbonacci numbers + 2PSSF
-// DESCRIPTION  : Strategy based on Lokke One-Sided Gaussian Filter and addapted from Forex to Crypto Trading.
+// DESCRIPTION  : Strategy based on Loxx One-Sided Gaussian Filter and addapted from Forex to Crypto Trading.
 //
 // DETAILS & RATIONALE: 
 // The Gaussian moving average (GA) is a technical analysis tool that is used to smooth out price data and identify trends. 
@@ -29,7 +32,14 @@
 // data point) so for example, if we use a length of 10, the weights will be 1, 1, 2, 3, 5, 8, 13, 21, 34, 55 with the 55 
 // being the weight applied to the most recent / current bar's selected value (close, hl2, hc3..etc) and moving backward.
 // Finally the John Ehlers's 2 Pole Super Smoother Filter follows the price very closely and very useful because it is 
-// consistent with uptrends and falls sharply during a sudden downtrend so it should be able to help you stay more profitable. 
+// consistent with uptrends and falls sharply during a sudden downtrend so it should be able to help to stay more profitable.
+// Additionally to the signaling, to decide when to enter to a position, it uses a mix of RSI and ADX indicators used together
+// to confirm tendency in a trend-following setup like this. ADX measures the strength of a trend, not its direction and RSI 
+// measures momentum, used toghether can help to make a stronger desition and help to detect reversals.
+// Finally, in terms of risk management, I replaced the fixed MAX_LOSS_TOLERANCE parameter and CRASH_PROTECTION_PRICE to a dinamically
+// evaluated Trailing Stop Price based on ATR with a threshold to decide to be more conservative or more aggresive based on market
+// volatility. 
+// 
 
 // References: 
 // https://www.tradingview.com/script/BCTSMir8-Gaussian-Moving-Average-GA/#:~:text=The%20Gaussian%20moving%20average%20(GA,Gaussian%20distribution%20to%20assign%20weights.
@@ -40,7 +50,7 @@
 
 //@version=5
 //@strategy_alert_message {{strategy.order.alert_message}}
-strategy("ST6-GMA_TEST_1", overlay=true, initial_capital = 50, default_qty_type=strategy.percent_of_equity, default_qty_value=100, max_bars_back = 5000, commission_type = strategy.commission.percent, commission_value = 0.0075, currency = currency.USD) //each trx is 20% of 100 USD capital
+strategy("ST6-GMA_TEST_1", overlay=true, initial_capital = 100, default_qty_type=strategy.percent_of_equity, default_qty_value=100, max_bars_back = 5000, commission_type = strategy.commission.percent, commission_value = 0.0075, currency = currency.USD) //each trx is 20% of 100 USD capital
 
 // ————— Imports
 
@@ -80,8 +90,8 @@ int end_year                    = input.int(title="End Year",  defval = 2023, gr
 //ALGO_TRADING SETTINGS
 int smthper                     = input.int(15, "Guassian Levels Depth", maxval = 100, group=  "Basic Settings")
 int extrasmthper                = input.int(10, "Extra Smoothing (2-Pole Ehlers Super Smoother) Period", group=  "Basic Settings")
-int atrper                      = input.int(10, "ATR Period", group = "Basic Settings")
-float mult                      = input.float(1.5, "ATR Multiplier", group = "Basic Settings")
+int atrper                      = input.int(14, "ATR Period (14 to 21)", group = "Basic Settings")
+float mult                      = input.float(1.5, "ATR Multiplier (1 to 2)", group = "Basic Settings")
 
 //RISK & LOSS PROTECTION
 float max_loss_tolerance        = input.float(title="MAX_LOSS_TOLERANCE", defval = MAX_LOSS_TOLERANCE, step = 0.15, group = "RISK & PROFIT") 
@@ -171,6 +181,29 @@ SmthMA(level, src, per)=>
         sum += matrix.get(gtemp, i, level) * nz(src[i])
     sum
 
+//calc ADX (Average Directional Index) to confirm tendency strenght
+calcADX(int period) =>
+    // Calcular DM+ y DM-
+    dm_plus = ta.change(high)
+    dm_minus = ta.change(low)
+    plus_dm = (dm_plus > dm_minus and dm_plus > 0) ? dm_plus : 0
+    minus_dm = (dm_minus > dm_plus and dm_minus > 0) ? dm_minus : 0
+    
+    // Calcular ATR
+    atr = ta.atr(period)
+
+    // Calcular los valores direccionales
+    di_plus = ta.sma(100 * (plus_dm / atr), period)
+    di_minus = ta.sma(100 * (minus_dm / atr), period)
+
+    // Calcular DX
+    dx = 100 * math.abs(di_plus - di_minus) / (di_plus + di_minus)
+
+    // Calcular ADX
+    adx = ta.sma(dx, period)
+
+    [di_plus, di_minus, adx]
+
 
 // ————— Calculations
 
@@ -201,10 +234,14 @@ plotshape(goLong and showsignals, title = "Long", color = color.yellow, textcolo
 plotshape(goShort and showsignals, title = "Short", color = color.fuchsia, textcolor = color.fuchsia, text = "S", style = shape.triangledown, location = location.abovebar, size = size.tiny)
 
 
-//Another aux indicator (RSI 50)
+//Another aux indicator (RSI 9) tunned for 15 mins timeframe
 RSI = ta.rsi(close, 50)
 RSI_1 = ta.rsi(close[1], 50)
 RSI_2 = ta.rsi(close[2], 50)
+
+//Another aux indicator to evaluate tendency strenght using ADX (to use with RSI)
+[di_plus, di_minus, adx] = calcADX(14) //14 for 15 mins at BTC/USDT
+trend_strong = adx > 25                // just standard good value from the indicator author
 
 //TRADING STRATEGY
 is_pos_closed           = (strategy.position_size == 0.0)
@@ -213,25 +250,48 @@ is_short                = strategy.position_size < 0
 currentPositionPrice    = strategy.opentrades.entry_price(strategy.opentrades - 1)
 longExitPrice           = currentPositionPrice * (1 + spread)
 shortExitPrice          = currentPositionPrice * ( 1 - spread)
-longCrashProtectionPrice    = currentPositionPrice * (1 - crash_protection_price)
-shortCrashProtectionPrice    = currentPositionPrice * (1 + crash_protection_price)
-
-// Exit condition using trailing stop based on ATR
-trailingStopPrice = is_long ? currentPositionPrice + atr * mult : currentPositionPrice - atr * mult
-
-//LONG TRADING CONDITIONS
-
-enterLongCondition  = is_pos_closed == true and goLong == true and (open > smax) and RSI > 50 and RSI_1 > 50 and RSI_2 > 50
-exitLongCondition   = is_pos_closed == false and is_long == true and (close >= longExitPrice or (close <= longCrashProtectionPrice and close[1] <= longCrashProtectionPrice and close[2] <= longCrashProtectionPrice))
-
-//SHORT TRADING CONDITIONS
-enterShortCondition     = is_pos_closed == true and goShort == true and (close < smin) and RSI < 50 and RSI_1 < 50 and RSI_2 < 50
-exitShortCondition      = is_pos_closed == false and is_short == true and (close <= shortExitPrice or (close >= shortCrashProtectionPrice and close[1] >= shortCrashProtectionPrice and close[2] >= shortCrashProtectionPrice))
+//longCrashProtectionPrice    = currentPositionPrice * (1 - crash_protection_price) //not used - enable si te da cuco
+//shortCrashProtectionPrice    = currentPositionPrice * (1 + crash_protection_price) //not used - enable si te da cuco
 
 
+// a.- EXIT CONDITIONS USING TRAILING STOP BASED ON ATR - DINAMICALLY
+
+// Implement a threshold_high_volatility using ATR
+float threshold_high_volatility = atr * 1.5
+if atr > threshold_high_volatility
+    mult := 2.0  // Ajuste más conservador en alta volatilidad
+
+
+trailingStopPrice = 0.0
+float atrMultiplier = mult //wtf, better rename the variable mult. 
+
+
+// If we are in a long position
+if (strategy.position_size > 0)
+    // Evaluate the trailing stop price dinamically
+    trailingStopPrice := math.max(trailingStopPrice, close - atr * atrMultiplier)
+    
+
+// if we are in a short position
+if (strategy.position_size < 0)
+    // Evaluate the trailing stop price dinamically for shorts
+    trailingStopPrice := math.min(trailingStopPrice, close + atr * atrMultiplier)
+    
+
+
+// b.- TRADING CONDITIONS: 
+//  Enter with the combination of signals + RSI + ADX 
+//  Exit with combination of targetprice or trailingstoprice (as a dynamic protection measure considering volatility with ATR)
+
+enterLongCondition  = is_pos_closed == true and goLong == true and (open > smax) and RSI > 45 and RSI_1 > 45 and RSI_2 > 45 and trend_strong
+exitLongCondition = is_pos_closed == false and is_long == true and (close >= longExitPrice or close <= trailingStopPrice)
+enterShortCondition     = is_pos_closed == true and goShort == true and (close < smin) and RSI < 55 and RSI_1 < 55 and RSI_2 < 55 and trend_strong
+exitShortCondition = is_pos_closed == false and is_short == true and (close <= shortExitPrice or close >= trailingStopPrice)
+
+//Execute orders
 if between_dates
 
-    //ALERT & WEBHOOK CUSTOM FIELDS:
+    //ALERT & WEBHOOK CUSTOM FIELDS: This is sending the order to the backend processor api (webhook) hosted at aws to send orders to exchanges 
     alertBotMessage = helpers.generateWebhookAlertMessage(BOT_WEBHOOK_KEY, BOT_STRATEGY_ID, BOT_SESSION_ID, BOT_PRODUCTION_RUN)
     
     strategy.entry("long_"+ BOT_SESSION_ID, direction = strategy.long, when = enterLongCondition, limit = close, comment = "EN-L", alert_message = alertBotMessage)
@@ -243,14 +303,15 @@ if between_dates
     //strategy.close("short", when = cancelShortCondition, comment = "CA-S")
 
 
+
+if is_pos_closed
+    trailingStopPrice := na  // Reset the trailing on a new operation
+
+
+
 // ————— Visuals
 
-//plot takeProfit price for long and short and plot crashProtectionPrice
-plot(longExitPrice, "L", (is_long ? color.fuchsia : na), style = plot.style_circles)
-plot (shortExitPrice, "S", (is_short ? color.yellow : na), style = plot.style_circles)
-plot(longCrashProtectionPrice, 'C', (is_long) ? color.teal : na, style = plot.style_circles)
-plot(shortCrashProtectionPrice, 'C', (is_short) ? color.silver : na, style = plot.style_circles)
-//plotshape(cancelLongCondition == true, title='CA', style = shape.xcross, size=size.tiny)
+plot(trailingStopPrice, 'TrailingStopPrice',  (is_pos_closed == false) ? color.teal : na , style = plot.style_line)
 
 
 //TABLE BACKTESTING STATS
@@ -273,8 +334,6 @@ var initialSize = 0.0
 //declare table & visuals
 var table t = table.new(position.middle_right, 3,6)
 var bgcolor = color.new(color.black,0)
-
-
 
 
 //only consider values between backtsesting range
@@ -351,9 +410,6 @@ helpers.fillCell(t,2,5, "GoShort", str.tostring(goShort), color.navy, color.whit
 //helpers.fillCell(t, 3,0,"#Drawdown", str.tostring(maxDrawdown), color.aqua, color.white)
 
 
-//plot a mark when a exit condition is met
-//plotshape(is_long and exitLongCondition, title = 'EX_L_CM', color=color.fuchsia, textcolor=color.fuchsia, text="", style = shape.xcross, location = location.abovebar, size=size.tiny)
-//plotshape(is_short and exitShortCondition, title = 'EX_S_CM', color=color.yellow, textcolor=color.yellow, text="", style = shape.xcross, location = location.belowbar, size=size.tiny)
 
 bgcolor(strategy.grossprofit > strategy.grossprofit[1] ? 
 	 color.new(color.green, 80) : na)
