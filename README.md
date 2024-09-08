@@ -1,5 +1,8 @@
 # Strategy 1 : MA + Filters + RIS + ADX + ATR - BTC/USDT (15-Min Timeframe)
 
+![CAP1](/cap1.png)
+*image from backtesting environment using july to august 2024*
+
 ### Overview
 
 This Pine Script strategy, is a working progress of my algotrading journey and learning process and it is designed for trading BTC/USDT on a 15-minute timeframe. It incorporates advanced moving averages and filters, trend confirmation using RSI (Relative Strength Index) and ADX (Average Directional Index), and dynamic risk management based on volatility using the ATR (Average True Range). The source of knowledge and the credits belongs to loxx, you can reach him on his profile at tradingview.com.
